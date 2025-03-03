@@ -1,29 +1,38 @@
 from selenium import webdriver
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.wait import WebDriverWait
-from selenium.common.exceptions import NoSuchElementException
 import time
-import ast
-
+import ast 
 
 class AutoLogin:
-    def __init__(self, url, path, name='', pswd=''):
-        self.driver = webdriver.Chrome(executable_path=path)
-        self.name = name
+    def __init__(self, url, path, stdCode, pswd):
+        # 配置 Edge 选项
+        edge_options = EdgeOptions()  # 使用正确的类名
+        edge_options.add_argument('--ignore-certificate-errors')
+        edge_options.add_argument('--ignore-ssl-errors')
+        edge_options.add_argument('--log-level=3')
+        edge_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+
+        # 初始化浏览器
+        service = Service()
+        self.driver = webdriver.Edge(service=service, options=edge_options)
         self.url = url
+        self.stdCode = stdCode
         self.pswd = pswd
 
     def get_params(self):
-        # 获得必要参数
         self.driver.get(self.url)
-        self.driver.implicitly_wait(5)
-
-        name_ele = self.driver.find_element_by_xpath('//input[@id="loginName"]')
-        name_ele.send_keys(self.name)
-        pswd_ele = self.driver.find_element_by_xpath('//input[@id="loginPwd"]')
+        time.sleep(2)
+        
+        name_ele = self.driver.find_element(By.XPATH, '//input[@id="loginName"]')
+        name_ele.send_keys(self.stdCode)
+        
+        pswd_ele = self.driver.find_element(By.XPATH, '//input[@id="loginPwd"]')
         pswd_ele.send_keys(self.pswd)
-
+        
         if WebDriverWait(self.driver, 180).until(EC.presence_of_element_located((By.ID, 'aPublicCourse'))):
             time.sleep(1)  # waiting for loading
             cookie_lis = self.driver.get_cookies()

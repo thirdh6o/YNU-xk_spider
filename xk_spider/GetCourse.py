@@ -2,18 +2,33 @@ import requests
 import ast
 import time
 import re
+import smtplib
+from email.mime.text import MIMEText
+from email.header import Header
 from requests.exceptions import HTTPError
 
 
-def to_wechat(key, title, string):
-    url = 'https://sc.ftqq.com/' + key + '.send'
-    dic = {
-        'text': title,
-        'desp': string
-    }
-    requests.get(url, params=dic)
+def send_notification(email_config, title, content):
+    sender = email_config['sender']
+    password = email_config['password']
+    receiver = email_config['receiver']
+    smtp_server = email_config['smtp_server']
+    smtp_port = email_config['smtp_port']
 
-    return title + '：已发送至微信'
+    message = MIMEText(content, 'plain', 'utf-8')
+    message['From'] = Header(sender)
+    message['To'] = Header(receiver)
+    message['Subject'] = Header(title)
+
+    try:
+        smtp = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        smtp.login(sender, password)
+        smtp.sendmail(sender, receiver, message.as_string())
+        smtp.quit()
+        return title + '：已发送至邮箱'
+    except Exception as e:
+        print(f'邮件发送失败：{str(e)}')
+        return f'邮件发送失败：{str(e)}'
 
 
 class GetCourse:
@@ -22,14 +37,7 @@ class GetCourse:
         self.stdcode = stdcode
         self.batchcode = batchcode
 
-        # self.flag = 0
-        # self.cookies = {
-        #     '_WEU': '',
-        #     'JSESSIONID': '',
-        #     'route': ['', '', ''],
-        # }
-
-    def judge(self, course_name, teacher, key='', kind='素选'):
+    def judge(self, courseName, teacher, email_config, kind='素选'):
         # 人数未满才返回classid
         classtype = "XGXK"
         if kind == '素选':
@@ -41,13 +49,14 @@ class GetCourse:
 
         while True:
             try:
-                query = self.__judge_datastruct(course_name, classtype)
+                query = self.__judge_datastruct(courseName, kind)  # 修改变量名：course_name -> courseName, classtype -> kind
                 r = requests.post(url, data=query, headers=self.headers)
                 r.raise_for_status()
                 flag = 0
                 while not r:
                     if flag > 2:
-                        to_wechat(key, f'{course_name} 查询失败，请检查失败原因', '线程结束')
+                        if email_config:
+                            send_notification(email_config, f'{course_name} 查询失败，请检查失败原因', '线程结束')
                         return False
                     print(f'[warning]: jugde()函数正尝试再次爬取')
                     time.sleep(3)
@@ -67,7 +76,20 @@ class GetCourse:
                 temp = r.text.replace('null', 'None').replace('false', 'False').replace('true', 'True')
                 res = ast.literal_eval(temp)
                 if kind == 'publicCourse.do':
-                    datalist = res['dataList']
+                    try:
+                        if not res['dataList']:
+                            print(f"未找到课程：{courseName}，等待重试...")
+                            time.sleep(2)  # 添加延迟避免请求过快
+                            
+                        datalist = res['dataList'][0]['tcList']
+                        if not datalist:
+                            print(f"课程 {courseName} 暂无教师信息，等待重试...")
+                            time.sleep(2)
+
+                            
+                    except (KeyError, IndexError) as e:
+                        print(f"获取课程信息失败：{e}，等待重试...")
+                        time.sleep(2)
                 elif kind == 'programCourse.do':
                     datalist = res['dataList'][0]['tcList']
                 else:
@@ -76,7 +98,8 @@ class GetCourse:
 
                 if res['msg'] == '未查询到登录信息':
                     print('登录失效，请重新登录')
-                    to_wechat(key, '登录失效，请重新登录', '线程结束')
+                    if email_config:
+                        send_notification(email_config, '登录失效，请重新登录', '线程结束')
                     return False
 
                 for course in datalist:
@@ -84,8 +107,9 @@ class GetCourse:
                     if remain > 0 and course['teacherName'] == teacher:
                         string = f'{course_name} {teacher}：{remain}人空缺'
                         print(string)
-                        to_wechat(key, f'{course_name} 余课提醒', string)
-                        res = self.post_add(course_name, teacher, classtype, course['teachingClassID'], key)
+                        if email_config:
+                            send_notification(email_config, f'{course_name} 余课提醒', string)
+                        res = self.post_add(course_name, teacher, classtype, course['teachingClassID'], email_config)
                         return res
 
                 print(f'{course_name} {teacher}：人数已满 {time.ctime()}')
@@ -93,10 +117,11 @@ class GetCourse:
 
             except HTTPError or SyntaxError:
                 print('登录失效，请重新登录')
-                to_wechat(key, '登录失效，请重新登录', '线程结束')
+                if email_config:
+                    send_notification(email_config, '登录失效，请重新登录', '线程结束')
                 return False
 
-    def post_add(self, classname, teacher, classtype, classid, key):
+    def post_add(self, classname, teacher, classtype, classid, email_config):
         query = self.__add_datastruct(classid, classtype)
 
         url = 'http://xk.ynu.edu.cn/xsxkapp/sys/xsxkapp/elective/volunteer.do'
@@ -104,7 +129,8 @@ class GetCourse:
         flag = 0
         while not r:
             if flag > 2:
-                to_wechat(key, f'{classname} 有余课，但post未成功', '线程结束')
+                if email_config:
+                    send_notification(email_config, f'{classname} 有余课，但post未成功', '线程结束')
                 break
             print(f'[warning]: post_add()函数正尝试再次请求')
             time.sleep(3)
@@ -115,7 +141,8 @@ class GetCourse:
         messge = ast.literal_eval(messge_str)['msg']
         title = '抢课结果'
         string = '[' + teacher + ']' + classname + ': ' + messge
-        to_wechat(key, title, string)
+        if email_config:
+            send_notification(email_config, title, string)
         return string
 
     def __add_datastruct(self, classid, classtype) -> dict:
@@ -158,28 +185,6 @@ class GetCourse:
 
         return query
 
-    # def update_cookie(self, string):
-    #     if '_WEU' in string:
-    #         self.cookies['_WEU'] = re.search(r'_WEU=(.+?)[,;]', string).group(1)
-    #     if 'JSESSIONID' in string:
-    #         self.cookies['JSESSIONID'] = re.search(r'JSESSIONID=(.+?)[,;]', string).group(1)
-    #     if 'route' in string:
-    #         routes = re.findall(r'route=(.+?)[,;]', string)
-    #         for route in routes:
-    #             self.cookies['route'][self.flag] = route
-    #             self.flag = (self.flag + 1) % 3
-    #
-    #     current = ''
-    #     for key, value in self.cookies.items():
-    #         if isinstance(value, list):
-    #             for s in value:
-    #                 current += key + '=' + s + '; '
-    #         else:
-    #             current += key + '=' + value + '; '
-    #
-    #     print(self.flag)
-    #     return current
-
 
 if __name__ == '__main__':
     Headers = {
@@ -192,4 +197,3 @@ if __name__ == '__main__':
     batchCode = ''
 
     test = GetCourse(Headers, stdCode, batchCode)
-    # print(test.judge('初级泰语', '李娟'))
